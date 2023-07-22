@@ -1,0 +1,234 @@
+---
+title: "Untitled"
+author: "Ellie Mainou"
+date: "1/23/2023"
+output: html_document
+---
+
+```{r}
+library(readxl)
+library(readr)
+library(deSolve)
+library(cubature)
+library(pracma)
+library(Bhat)
+library(readr)
+```
+
+
+```{r}
+DataB2 <- read.csv("TimeToVR/Branching Process/LastUndetFirstDet_B2.csv", header=TRUE)
+DataC5 <- read.csv("TimeToVR/Branching Process/LastUndetFirstDet_C5.csv", header=TRUE)
+DataC4 <- read.csv("TimeToVR/Branching Process/LastUndetFirstDet_C4.csv", header=TRUE)
+```
+
+```{r}
+#Setup for parameter values 
+namescol<-c("a", "q0", "delay1", "delay2", "delay3")
+namesrow<-c("estimate", "95CILow", "95CIHigh")
+BestB2Prms<-as.data.frame(matrix(data=NA, nrow=length(namesrow), ncol=length(namescol)))
+colnames(BestB2Prms)<-namescol
+rownames(BestB2Prms)<-namesrow
+#estimates
+BestB2Prms$a[1]=0.29
+BestB2Prms$q0[1]=0.98
+BestB2Prms$delay1[1]=23.5
+BestB2Prms$delay2[1]=22.4
+BestB2Prms$delay3[1]=9.28
+#Low value of the 95% CI
+BestB2Prms$a[2]=0.11
+BestB2Prms$q0[2]=0.94
+BestB2Prms$delay1[2]=23.3
+BestB2Prms$delay2[2]=22.1
+BestB2Prms$delay3[2]=9.22
+#High value of the 95% CI
+BestB2Prms$a[3]=0.71
+BestB2Prms$q0[3]=1
+BestB2Prms$delay1[3]=23.7
+BestB2Prms$delay2[3]=23.6
+BestB2Prms$delay3[3]=9.34
+```
+
+
+### Antibody therapy
+
+How does the cumulative probability of rebound change if we increase f by 10%, 50% or 90%? 
+
+1. We estimate the curve for the data (f, LR size) for the subject using parameter estimates. 
+2. We recreate the same curve, this time with increased f. If the new value of f is greater than 1, then we stop. 
+3. We find the median time to VR (day at which PVR=0.5) for each value of f. 
+4. Create a summary figure indicating by how much the median time to viral rebound changes
+
+
+
+```{r}
+#Matrix to store median time to viral rebound for each monkey
+MedianTVR<-as.data.frame(matrix(data=NA, nrow=nrow(DataB2), ncol=5)) # NULL 
+names<-c("ID", "f", "10%","50%", "90%" )
+colnames(MedianTVR)=names
+MedianTVR$ID=DataB2$ID
+
+for (n in 1:nrow(DataB2)){
+FirstDet <- DataB2$FirstDet[n]
+LastUndet <- DataB2$LastUndet[n]
+Neut_Percent <- DataB2$Neut_Percent[n]/100
+CD4_Data<-DataB2$CD4_Wk0_ul[n]
+IPDA_Data<-DataB2$IPDA[n]
+Det_IPDA_Data= DataB2$Det_IPDA[n]
+
+CD4_Data<-CD4_Data*1e3*162 #over the entire monkey 
+
+f<-c(Neut_Percent, 1.1*Neut_Percent, 1.5*Neut_Percent, 1.9*Neut_Percent)
+for(k in 1:length(f)){
+  if (f[k]>=1.00){f[k]=1}
+}
+
+f<-f[!duplicated(f)]
+
+CD4<-CD4_Data
+IPDA<-IPDA_Data
+Det_IPDA<-Det_IPDA_Data
+LR<-log10(CD4*IPDA/1e6)
+
+
+firstdet_alldata <- NULL
+lastundet_alldata <- NULL
+# model
+ts<-seq(0,60,by=1)
+
+pvr<-as.data.frame(matrix(data=NA, nrow=length(ts), ncol=length(f))) # NULL 
+
+for (i in 1:length(f)){
+  for (jj in c(1:length(ts))) {
+    
+      a=BestB2Prms$a[1]
+      q0=BestB2Prms$q0[1]
+      delay1=BestB2Prms$delay1[1]
+      delay2=BestB2Prms$delay2[1]
+      delay3=BestB2Prms$delay3[1]
+     
+      q=min(q0*f[i], 1)
+      delay=delay1+delay2*f[i]-delay3*LR
+      pvr[jj, i] <- 1 - exp(-LR*a*(1-q)*(ts[jj]-delay))
+      if (ts[jj]<=delay) {pvr[jj, i]<-0} # if t<delay, pvr=0 for that monkey
+      
+  }
+     MedianTVR[n, i+1]= min(which(pvr[, i]>=0.5))
+
+}
+
+#Plot results
+ID.current <- DataB2$ID[n]
+bquote(ID == ID.current)
+bquote(ID == .(ID.current))
+
+y<-c("Original", "10%", "50%", "90%")
+
+for (i in 1:length(f)){
+plot(ts, pvr[, i], type="l", col=plotcolors[i], xlim=c(0, 60), ylim=c(0, 1), xlab="Time since ATI (days)", ylab="Cum. Prob. Rbd",  main = bquote(ID == .(ID.current)))
+grid(nx = NULL, ny = NULL, col = "lightgray", lty = "dotted",
+     lwd = par("lwd"), equilogs = TRUE)
+par(new=TRUE)
+}
+legend("topleft", legend=y[1:length(f)], col=plotcolors[1:length(f)], lty=1, cex=0.8 )
+
+}
+
+```
+
+Create summary figure 
+
+```{r}
+DiffMedian<--as.data.frame(matrix(data=NA, nrow=nrow(DataB2)*2, ncol=2)) 
+colnames(DiffMedian)<-c("Diff", "Increase")
+DiffMedian$Increase=c(rep(10, 10), rep(50, 10))
+DiffMedian$Diff[1:10]=MedianTVR$`10%`-MedianTVR$f
+DiffMedian$Diff[11:20]=MedianTVR$`50%`-MedianTVR$f
+
+boxplot(Diff~Increase,data=DiffMedian, main="Increase in Median time to rebound",
+   xlab="% Increase in Neutralization", ylab="Increase in median time to rebound (days)")
+```
+
+
+### Latency reversing agents 
+
+How does the cumulative probability of rebound change if we decrease the latent reservoir by 10%, 50% or 90%? 
+
+1. We estimate the curve for the data (f, LR size) for the subject using parameter estimates. 
+2. We recreate the same curve, this time with decreased LR.The way we estimate the decreased LR is by decreasing the IPDA measurement. If the new value of IPDA becomes 0, then we stop. 
+3. We find the median time to VR (day at which PVR=0.5) for each value of f. 
+4. Create a summary figure indicating by how much the median time to viral rebound changes
+
+
+
+```{r}
+#Matrix to store median time to viral rebound for each monkey
+MedianTVRLR<-as.data.frame(matrix(data=NA, nrow=nrow(DataB2), ncol=5)) # NULL 
+names<-c("ID", "LR", "10%","50%", "90%" )
+colnames(MedianTVRLR)=names
+MedianTVRLR$ID=DataB2$ID
+
+for (n in 1:2){#nrow(DataB2)){
+FirstDet <- DataB2$FirstDet[n]
+LastUndet <- DataB2$LastUndet[n]
+Neut_Percent <- DataB2$Neut_Percent[n]/100
+CD4_Data<-DataB2$CD4_Wk0_ul[n]
+IPDA_Data<-DataB2$IPDA[n]
+Det_IPDA_Data= DataB2$Det_IPDA[n]
+
+CD4_Data<-CD4_Data*1e3*162 #over the entire monkey 
+
+IPDAall<-c(IPDA_Data, 0.9*IPDA_Data, 0.5*IPDA_Data, 0.1*IPDA_Data)
+
+IPDAall<-IPDAall[!duplicated(IPDAall)]
+
+CD4<-CD4_Data
+IPDA<-IPDAall
+Det_IPDA<-Det_IPDA_Data
+LR<-log10(CD4*IPDA/1e6)
+f<-Neut_Percent
+
+firstdet_alldata <- NULL
+lastundet_alldata <- NULL
+# model
+ts<-seq(0,60,by=1)
+
+pvr<-as.data.frame(matrix(data=NA, nrow=length(ts), ncol=length(LR))) # NULL 
+
+for (i in 1:length(IPDA)){
+  for (jj in c(1:length(ts))) {
+    
+      a=BestB2Prms$a[1]
+      q0=BestB2Prms$q0[1]
+      delay1=BestB2Prms$delay1[1]
+      delay2=BestB2Prms$delay2[1]
+      delay3=BestB2Prms$delay3[1]
+     
+      q=min(q0*f, 1)
+      delay=delay1+delay2*f-delay3*LR[i]
+      pvr[jj, i] <- 1 - exp(-LR[i]*a*(1-q)*(ts[jj]-delay))
+      if (ts[jj]<=delay) {pvr[jj, i]<-0} # if t<delay, pvr=0 for that monkey
+      
+  }
+     MedianTVRLR[n, i+1]= min(which(pvr[, i]>=0.5))
+
+}
+
+#Plot results
+ID.current <- DataB2$ID[n]
+bquote(ID == ID.current)
+bquote(ID == .(ID.current))
+
+y<-c("Original", "10%", "50%", "90%")
+
+for (i in 1:length(LR)){
+plot(ts, pvr[, i], type="l", col=plotcolors[i], xlim=c(0, 60), ylim=c(0, 1), xlab="Time since ATI (days)", ylab="Cum. Prob. Rbd",  main = bquote(ID == .(ID.current)))
+grid(nx = NULL, ny = NULL, col = "lightgray", lty = "dotted",
+     lwd = par("lwd"), equilogs = TRUE)
+par(new=TRUE)
+}
+legend("topleft", legend=y[1:length(f)], col=plotcolors[1:length(f)], lty=1, cex=0.8 )
+
+}
+
+```
